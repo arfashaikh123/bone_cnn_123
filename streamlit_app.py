@@ -4,9 +4,9 @@
 # =====================================
 
 import streamlit as st
-from PIL import Image
+from PIL import Image, ImageOps
 import os
-import cv2
+import io
 import joblib
 import numpy as np
 from skimage.feature import hog
@@ -80,23 +80,33 @@ except Exception as e:
 # 🔍 Image Preprocessing
 # =====================================
 def preprocess_image(image_bytes):
-    """Preprocess image for prediction"""
-    np_img = np.frombuffer(image_bytes, np.uint8)
-    img = cv2.imdecode(np_img, cv2.IMREAD_GRAYSCALE)
+    """Preprocess image for ML models (HOG + PCA)"""
+    # Load image using PIL
+    img_pil = Image.open(io.BytesIO(image_bytes))
     
-    if img is None:
-        raise ValueError("Invalid image format or empty file.")
+    # Convert to grayscale
+    img_gray = img_pil.convert('L')
     
-    img = cv2.equalizeHist(cv2.resize(img, IMG_SIZE))
+    # Resize to 64x64
+    img_resized = img_gray.resize(IMG_SIZE, Image.Resampling.LANCZOS)
+    
+    # Convert to numpy array
+    img_arr = np.array(img_resized)
+    
+    # Apply histogram equalization using PIL/numpy
+    # Simple equalization: stretch histogram
+    img_arr = ((img_arr - img_arr.min()) / (img_arr.max() - img_arr.min() + 1e-8) * 255).astype(np.uint8)
+    
+    # Extract HOG features
     features = hog(
-        img,
+        img_arr,
         orientations=9,
         pixels_per_cell=(8, 8),
         cells_per_block=(2, 2),
         block_norm='L2-Hys',
         visualize=False
     )
-    return features.reshape(1, -1), img
+    return features.reshape(1, -1), img_arr
 
 # =====================================
 # 🧠 Prediction Function
@@ -143,21 +153,17 @@ def predict_fracture(image_bytes, model_key):
 
 def predict_with_cnn(image_bytes):
     """Make prediction using CNN model"""
-    # Load image from bytes
-    np_img = np.frombuffer(image_bytes, np.uint8)
-    img_bgr = cv2.imdecode(np_img, cv2.IMREAD_COLOR)
+    # Load image using PIL
+    img_pil = Image.open(io.BytesIO(image_bytes))
     
-    if img_bgr is None:
-        raise ValueError("Invalid image format or empty file.")
-    
-    # Convert BGR to RGB
-    img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
+    # Convert to RGB (in case it's grayscale or RGBA)
+    img_rgb = img_pil.convert('RGB')
     
     # Resize to CNN input size (180x180)
-    img_resized = cv2.resize(img_rgb, CNN_IMG_SIZE)
+    img_resized = img_rgb.resize(CNN_IMG_SIZE, Image.Resampling.LANCZOS)
     
-    # Normalize and add batch dimension
-    img_arr = img_resized / 255.0
+    # Convert to numpy array and normalize
+    img_arr = np.array(img_resized) / 255.0
     img_arr = np.expand_dims(img_arr, axis=0)
     
     # Predict
@@ -175,8 +181,8 @@ def predict_with_cnn(image_bytes):
         confidence = (1 - pred) * 100
         predicted_class = "fractured"
     
-    # Create grayscale preview
-    processed_img = cv2.cvtColor(img_resized, cv2.COLOR_RGB2GRAY)
+    # Create grayscale preview using PIL
+    processed_img = np.array(img_resized.convert('L'))
     
     return {
         "model_used": "CNN (Deep Learning)",
